@@ -96,8 +96,8 @@ credit-risk-streamlit/
 ├── scaler.pkl # StandardScaler (fitted on 9 columns)
 ├── requirements.txt # Dependencies for deployment
 ├── README.md # Project documentation
-└── notebooks/
-└── Loan_default_prediction.ipynb
+├── notebooks/
+│   └── Loan_default_prediction.ipynb
 ```
 
 
