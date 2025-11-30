@@ -12,55 +12,179 @@ import pandas as pd
 import numpy as np
 import joblib
 
-# Load model + scaler
-model = joblib.load("xgboost_credit_model.pkl")
-scaler = joblib.load("scaler.pkl")
+# =======================
+# Load model & scaler
+# =======================
+@st.cache_resource
+def load_model_and_scaler():
+    model = joblib.load("xgboost_credit_model.pkl")
+    scaler = joblib.load("scaler.pkl")
+    return model, scaler
 
-st.set_page_config(page_title="Credit Risk Prediction App", layout="centered")
-st.title("📊 Credit Risk Prediction App")
-st.write("Enter the client information below to estimate the probability of loan default.")
+model, scaler = load_model_and_scaler()
 
-# User Inputs
-col1, col2 = st.columns(2)
+# Columns the scaler was trained on (from scaler.feature_names_in_)
+SCALER_COLS = [
+    'person_age',
+    'person_income',
+    'person_emp_length',
+    'loan_grade',
+    'loan_amnt',
+    'loan_int_rate',
+    'loan_percent_income',
+    'cb_person_default_on_file',
+    'cb_person_cred_hist_length'
+]
 
-with col1:
-    person_age = st.number_input("Age", min_value=18, max_value=100, value=30)
-    person_income = st.number_input("Annual Income ($)", min_value=0, value=50000)
-    person_emp_length = st.number_input("Employment Length (years)", min_value=0, value=5)
-    cb_person_cred_hist_length = st.number_input("Credit History Length", min_value=1, value=10)
-
-with col2:
-    loan_amnt = st.number_input("Loan Amount ($)", min_value=0, value=10000)
-    loan_int_rate = st.number_input("Interest Rate (%)", min_value=0.0, value=10.0)
-    loan_percent_income = st.number_input("Loan Percent Income (Loan/Income)", min_value=0.0, value=0.20)
-
-# Categorical Inputs
-st.subheader("Loan & Client Categories")
-
-loan_intent = st.selectbox(
-    "Loan Intent",
-    ['VENTURE', 'PERSONAL', 'EDUCATION', 'MEDICAL', 'DEBTCONSOLIDATION', 'HOMEIMPROVEMENT']
+# =======================
+# Page config & styling
+# =======================
+st.set_page_config(
+    page_title="Credit Risk Prediction",
+    page_icon="💳",
+    layout="wide"
 )
 
-loan_grade = st.selectbox(
-    "Loan Grade",
-    ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+# Simple custom CSS for nicer UI
+st.markdown(
+    """
+    <style>
+    .main-title {
+        font-size: 32px;
+        font-weight: 700;
+        margin-bottom: 0.2rem;
+    }
+    .sub-title {
+        font-size: 16px;
+        color: #666666;
+        margin-bottom: 1.5rem;
+    }
+    .risk-box {
+        padding: 1rem 1.2rem;
+        border-radius: 0.75rem;
+        border: 1px solid #e0e0e0;
+        background-color: #fafafa;
+        margin-top: 1rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
-person_home_ownership = st.selectbox(
-    "Home Ownership",
-    ['RENT', 'OWN', 'MORTGAGE', 'OTHER']
+# =======================
+# Sidebar
+# =======================
+st.sidebar.title("ℹ️ About this app")
+st.sidebar.write(
+    """
+    This app uses a **trained XGBoost model** to estimate the probability that
+    a client will **default on a loan**.
+
+    - Trained on a credit risk dataset  
+    - Includes preprocessing (encoding + scaling)  
+    - Output: default probability + risk label
+    """
 )
 
-cb_person_default_on_file = st.selectbox(
-    "Has Defaulted Before?",
-    ['Y', 'N']
+st.sidebar.markdown("---")
+st.sidebar.write("**Tips:**")
+st.sidebar.write("- Higher *loan_percent_income* → usually more risk")
+st.sidebar.write("- Previous default history strongly increases risk")
+st.sidebar.write("- Loan grade, interest rate and DTI are key drivers")
+
+# =======================
+# Header
+# =======================
+st.markdown('<p class="main-title">💳 Credit Risk Prediction</p>', unsafe_allow_html=True)
+st.markdown(
+    '<p class="sub-title">Fill in the client and loan information to estimate the probability of default.</p>',
+    unsafe_allow_html=True
 )
 
-# Predict Button
-if st.button("Predict Default Risk"):
+# =======================
+# Input form
+# =======================
+with st.form("client_form"):
+    st.markdown("### 🧍 Client Information")
 
-    # Create DataFrame from user input
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        person_age = st.number_input("Age", min_value=18, max_value=100, value=30)
+        person_emp_length = st.number_input("Employment Length (years)", min_value=0, max_value=60, value=5)
+        cb_person_cred_hist_length = st.number_input("Credit History Length (years)", min_value=1, max_value=80, value=10)
+
+    with col2:
+        person_income = st.number_input("Annual Income ($)", min_value=0, value=50000, step=1000)
+        person_home_ownership = st.selectbox(
+            "Home Ownership",
+            ['RENT', 'OWN', 'MORTGAGE', 'OTHER']
+        )
+        cb_person_default_on_file = st.selectbox(
+            "Has Defaulted Before?",
+            ['N', 'Y']    # default = No
+        )
+
+    with col3:
+        st.markdown("### ")
+
+        loan_intent = st.selectbox(
+            "Loan Intent",
+            ['VENTURE', 'PERSONAL', 'EDUCATION', 'MEDICAL', 'DEBTCONSOLIDATION', 'HOMEIMPROVEMENT']
+        )
+
+        loan_grade = st.selectbox(
+            "Loan Grade",
+            ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+        )
+
+    st.markdown("---")
+    st.markdown("### 💰 Loan Information")
+
+    col4, col5, col6 = st.columns(3)
+
+    with col4:
+        loan_amnt = st.number_input("Loan Amount ($)", min_value=0, value=10000, step=500)
+
+    with col5:
+        loan_int_rate = st.number_input("Interest Rate (%)", min_value=0.0, max_value=100.0, value=10.0, step=0.1)
+
+    with col6:
+        loan_percent_income = st.number_input(
+            "Loan Percent Income (Loan / Income)",
+            min_value=0.0,
+            max_value=10.0,
+            value=0.2,
+            step=0.01
+        )
+
+    submitted = st.form_submit_button("🔍 Predict Default Risk")
+
+
+# =======================
+# Prediction Logic
+# =======================
+def preprocess_and_predict(
+    model,
+    scaler,
+    person_age,
+    person_income,
+    person_emp_length,
+    cb_person_cred_hist_length,
+    person_home_ownership,
+    cb_person_default_on_file,
+    loan_intent,
+    loan_grade,
+    loan_amnt,
+    loan_int_rate,
+    loan_percent_income
+):
+    """
+    Build a single-row DataFrame, apply EXACT same preprocessing
+    as in training: mapping, encoding, alignment, scaling, then predict.
+    """
+
+    # 1) Build raw input as DataFrame
     input_dict = {
         "person_age": person_age,
         "person_income": person_income,
@@ -75,34 +199,99 @@ if st.button("Predict Default Risk"):
         "cb_person_default_on_file": cb_person_default_on_file
     }
 
-    input_df = pd.DataFrame([input_dict])
+    df = pd.DataFrame([input_dict])
 
-    # One-hot encode
-    input_df = pd.get_dummies(input_df)
+    # 2) Map Y/N and loan grade exactly as during training
+    df['cb_person_default_on_file'] = df['cb_person_default_on_file'].map({'Y': 1, 'N': 0})
+    grade_map = {'A': 1, 'B': 2, 'C': 3, 'D': 4, 'E': 5, 'F': 6, 'G': 7}
+    df['loan_grade'] = df['loan_grade'].map(grade_map)
 
-    # Align with model training columns
-    missing_cols = set(model.get_booster().feature_names).difference(input_df.columns)
+    # 3) One-hot encode categorical vars (loan_intent, home_ownership, etc.)
+    df = pd.get_dummies(df)
+
+    # 4) Align with model’s expected features
+    booster = model.get_booster()
+    model_features = booster.feature_names
+
+    if model_features is None:
+        # Fallback: if feature names are not stored, just use df columns
+        model_features = df.columns.tolist()
+
+    # Add any missing columns as 0
+    missing_cols = set(model_features) - set(df.columns)
     for col in missing_cols:
-        input_df[col] = 0
+        df[col] = 0
 
-    input_df = input_df[model.get_booster().feature_names]
+    # Drop any extra columns not seen during training
+    df = df[model_features]
 
-    # Scale numeric columns
-    numeric_cols = ['person_age', 'person_income', 'person_emp_length',
-                    'loan_amnt', 'loan_int_rate', 'loan_percent_income',
-                    'cb_person_cred_hist_length']
+    # 5) Scale the EXACT same columns the scaler was trained on
+    # (we know these from scaler.feature_names_in_)
+    cols_to_scale = SCALER_COLS
+    df[cols_to_scale] = scaler.transform(df[cols_to_scale])
 
-    input_df[numeric_cols] = scaler.transform(input_df[numeric_cols])
+    # 6) Predict probability and class
+    proba_default = model.predict_proba(df)[0][1]
+    pred_class = int(proba_default >= 0.5)
 
-    # Predict
-    proba = model.predict_proba(input_df)[0][1]
-    pred_class = int(proba >= 0.5)
+    return proba_default, pred_class
 
-    # Display result
-    st.subheader("📈 Prediction Result")
-    st.write(f"**Default Probability:** `{proba:.2f}`")
 
-    if pred_class == 1:
-        st.error("⚠️ High Default Risk — The client is likely to default.")
-    else:
-        st.success("✅ Low Default Risk — The client is unlikely to default.")
+# =======================
+# Run prediction if submitted
+# =======================
+if submitted:
+    proba, pred_class = preprocess_and_predict(
+        model=model,
+        scaler=scaler,
+        person_age=person_age,
+        person_income=person_income,
+        person_emp_length=person_emp_length,
+        cb_person_cred_hist_length=cb_person_cred_hist_length,
+        person_home_ownership=person_home_ownership,
+        cb_person_default_on_file=cb_person_default_on_file,
+        loan_intent=loan_intent,
+        loan_grade=loan_grade,
+        loan_amnt=loan_amnt,
+        loan_int_rate=loan_int_rate,
+        loan_percent_income=loan_percent_income
+    )
+
+    # =======================
+    # Display results
+    # =======================
+    st.markdown("## 🧮 Prediction Result")
+
+    col_left, col_right = st.columns([2, 1])
+
+    with col_left:
+        st.markdown(
+            f"""
+            <div class="risk-box">
+                <b>Estimated Default Probability:</b> {proba:.2%}<br>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        if pred_class == 1:
+            st.error("⚠️ High Default Risk – This client is likely to default on the loan.")
+        else:
+            st.success("✅ Low Default Risk – This client is unlikely to default on the loan.")
+
+    with col_right:
+        st.write("### Risk Level")
+        if proba < 0.15:
+            st.success("🟢 **Low Risk**")
+        elif proba < 0.35:
+            st.warning("🟡 **Medium Risk**")
+        else:
+            st.error("🔴 **High Risk**")
+
+        st.write(
+            """
+            - < 15% → Low risk  
+            - 15–35% → Medium risk  
+            - > 35% → High risk
+            """
+        )
