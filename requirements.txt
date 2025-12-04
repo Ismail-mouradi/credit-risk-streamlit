@@ -4,3 +4,6 @@ numpy
 xgboost
 scikit-learn
 joblib
+matplotlib
+shap
+plotly
