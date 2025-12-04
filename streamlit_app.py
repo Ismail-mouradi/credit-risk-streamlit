@@ -7,205 +7,159 @@ Original file is located at
     https://colab.research.google.com/drive/1M0gY5vmJM_Od6sB1JYtAb_ZEl99MF4uz
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import joblib
+import time
 
-# --------------------------------------------------
+import joblib
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import shap
+import streamlit as st
+import matplotlib.pyplot as plt
+
+# -----------------------------------------------------------
 # PAGE CONFIG
-# --------------------------------------------------
+# -----------------------------------------------------------
 st.set_page_config(
     page_title="Credit Risk Prediction",
     page_icon="💳",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
-# --------------------------------------------------
-# LOAD MODEL & SCALER (joblib)
-# --------------------------------------------------
+# -----------------------------------------------------------
+# LOAD MODEL + SCALER + SHAP EXPLAINER
+# -----------------------------------------------------------
 @st.cache_resource
-def load_model_and_scaler():
+def load_objects():
     model = joblib.load("xgboost_credit_model.pkl")
     scaler = joblib.load("scaler.pkl")
-    return model, scaler
+    explainer = shap.TreeExplainer(model)
+    return model, scaler, explainer
 
-model, scaler = load_model_and_scaler()
-SCALER_COLS = list(scaler.feature_names_in_)  # the 9 columns we scaled in training
+model, scaler, explainer = load_objects()
+SCALER_COLS = scaler.feature_names_in_  # columns scaled in training
 
-# --------------------------------------------------
-# DARK THEME + CARD STYLES (CSS)
-# --------------------------------------------------
-st.markdown(
-    """
-    <style>
-    /* Overall background */
-    .stApp {
-        background-color: #0f172a;
-        color: #e5e7eb;
-    }
+# -----------------------------------------------------------
+# SIMPLE DARK STYLE
+# -----------------------------------------------------------
+st.markdown("""
+<style>
+body {
+    background-color: #111827;
+    color: #F3F4F6;
+}
 
-    /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background-color: #020617 !important;
-        color: #e5e7eb !important;
-        border-right: 1px solid #1f2937;
-    }
+/* Titles */
+h1, h2, h3, h4 {
+    color: #F3F4F6 !important;
+    font-weight: 700 !important;
+}
 
-    /* Titles */
-    h1, h2, h3, h4 {
-        color: #e5e7eb !important;
-    }
+/* Card container */
+.block {
+    background-color: #1F2937;
+    padding: 18px 22px;
+    border-radius: 12px;
+    border: 1px solid #374151;
+    margin-bottom: 16px;
+}
 
-    /* Cards / containers */
-    .card {
-        background-color: #020617;
-        padding: 1.2rem 1.5rem;
-        border-radius: 0.9rem;
-        border: 1px solid #1f2937;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.35);
-        margin-bottom: 1rem;
-    }
+/* Inputs */
+.stNumberInput input, .stSelectbox div[data-baseweb="select"] {
+    background-color: #F9FAFB !important;
+    color: #111827 !important;
+}
 
-    /* Result box */
-    .result-box {
-        background-color: #022c22;
-        padding: 1rem 1.2rem;
-        border-radius: 0.7rem;
-        border: 1px solid #065f46;
-        margin-top: 0.8rem;
-    }
+/* Predict button */
+.stButton>button {
+    width: 100%;
+    border-radius: 10px;
+    background-color: #2563EB;
+    color: white;
+    height: 3em;
+    font-size: 1.05em;
+}
+</style>
+""", unsafe_allow_html=True)
 
-    /* Buttons */
-    button[kind="primary"] {
-        border-radius: 999px !important;
-        padding: 0.6rem 1rem !important;
-        font-weight: 600 !important;
-        background: linear-gradient(90deg, #2563eb, #4f46e5) !important;
-        border: none !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# --------------------------------------------------
+# -----------------------------------------------------------
 # SIDEBAR
-# --------------------------------------------------
-st.sidebar.title("ℹ️ About this app")
-st.sidebar.write(
-    """
-This app uses a **trained XGBoost model** to estimate the probability that a client
-will **default on a loan**.
+# -----------------------------------------------------------
+st.sidebar.title("ℹ️ About this App")
+st.sidebar.write("""
+This app uses a trained **XGBoost** model to estimate  
+the probability that a client will **default** on a loan.
 
-- Trained on a credit risk dataset  
-- Includes preprocessing (encoding + scaling)  
-- Output: default probability + risk label
-"""
-)
+• Trained on a credit risk dataset  
+• Includes preprocessing (encoding + scaling)  
+• Outputs probability + risk level + explanation
+""")
 
 st.sidebar.markdown("---")
 st.sidebar.write("**Tips:**")
-st.sidebar.write("- Higher *loan_percent_income* → usually more risk")
+st.sidebar.write("- Higher `loan_percent_income` → more risk")
 st.sidebar.write("- Previous default history strongly increases risk")
-st.sidebar.write("- Loan grade, interest rate and DTI are key drivers")
+st.sidebar.write("- Loan grade, interest rate & DTI are key drivers")
 
-# --------------------------------------------------
+# -----------------------------------------------------------
 # HEADER
-# --------------------------------------------------
-st.markdown(
-    "<h1>💳 Credit Risk Prediction</h1>",
-    unsafe_allow_html=True,
-)
-st.write("Fill in the client and loan information below to estimate the probability of default.")
+# -----------------------------------------------------------
+st.markdown("<h1>💳 Credit Risk Prediction</h1>", unsafe_allow_html=True)
+st.write("Fill in the client and loan information below to estimate default risk.")
 
 st.markdown("---")
 
-# --------------------------------------------------
-# INPUT FORM: CLIENT vs LOAN
-# --------------------------------------------------
-with st.form("input_form"):
+# -----------------------------------------------------------
+# FORM INPUTS
+# -----------------------------------------------------------
+with st.form("prediction_form"):
+
     col_client, col_loan = st.columns(2)
 
-    # -------- CLIENT INFORMATION --------
+    # ---------- CLIENT INFO ----------
     with col_client:
-        st.markdown('<div class="card"><h3>👤 Client Information</h3>', unsafe_allow_html=True)
+        st.markdown("<div class='block'><h3>👤 Client Information</h3>", unsafe_allow_html=True)
 
-        person_age = st.number_input("Age", min_value=18, max_value=100, value=30)
-        person_income = st.number_input("Annual Income ($)", min_value=0, value=50_000, step=1_000)
-        person_emp_length = st.number_input("Employment Length (years)", min_value=0, max_value=60, value=5)
-        cb_person_cred_hist_length = st.number_input(
-            "Credit History Length (years)", min_value=0, max_value=80, value=10
-        )
+        person_age = st.number_input("Age", 18, 100, 30)
+        person_income = st.number_input("Annual Income ($)", 0, 5_000_000, 50_000)
+        person_emp_length = st.number_input("Employment Length (years)", 0, 50, 5)
+        cb_person_cred_hist_length = st.number_input("Credit History Length (years)", 0, 50, 10)
 
         person_home_ownership = st.selectbox(
             "Home Ownership",
-            options=["RENT", "OWN", "MORTGAGE", "OTHER"],
+            ["RENT", "OWN", "MORTGAGE", "OTHER"]
         )
 
         cb_person_default_on_file = st.selectbox(
             "Has Defaulted Before?",
-            options=["N", "Y"],  # default = No
+            ["N", "Y"]  # default: No
         )
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # -------- LOAN INFORMATION --------
+    # ---------- LOAN INFO ----------
     with col_loan:
-        st.markdown('<div class="card"><h3>💰 Loan Information</h3>', unsafe_allow_html=True)
+        st.markdown("<div class='block'><h3>💰 Loan Information</h3>", unsafe_allow_html=True)
 
         loan_intent = st.selectbox(
             "Loan Intent",
-            options=[
-                "PERSONAL",
-                "EDUCATION",
-                "MEDICAL",
-                "VENTURE",
-                "HOMEIMPROVEMENT",
-                "DEBTCONSOLIDATION",
-            ],
+            ["PERSONAL", "EDUCATION", "MEDICAL", "VENTURE", "HOMEIMPROVEMENT", "DEBTCONSOLIDATION"]
         )
 
-        loan_grade = st.selectbox("Loan Grade", options=["A", "B", "C", "D", "E", "F", "G"])
-
-        loan_amnt = st.number_input("Loan Amount ($)", min_value=500, max_value=40_000, value=10_000, step=500)
-        loan_int_rate = st.number_input(
-            "Interest Rate (%)", min_value=0.0, max_value=40.0, value=10.0, step=0.1
-        )
-        loan_percent_income = st.number_input(
-            "Loan Percent Income (Loan / Income)",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.20,
-            step=0.01,
-        )
+        loan_grade = st.selectbox("Loan Grade", ["A", "B", "C", "D", "E", "F", "G"])
+        loan_amnt = st.number_input("Loan Amount ($)", 500, 40_000, 10_000)
+        loan_int_rate = st.number_input("Interest Rate (%)", 0.0, 40.0, 10.0)
+        loan_percent_income = st.number_input("Loan Percent Income (Loan / Income)", 0.0, 1.0, 0.20)
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("")
-    submit = st.form_submit_button("🔍 Predict Default Risk")
+    submitted = st.form_submit_button("🔍 Predict Default Risk")
 
-# --------------------------------------------------
-# PREPROCESSING & PREDICTION FUNCTION
-# --------------------------------------------------
-def preprocess_and_predict(
-    model,
-    scaler,
-    person_age,
-    person_income,
-    person_emp_length,
-    cb_person_cred_hist_length,
-    person_home_ownership,
-    cb_person_default_on_file,
-    loan_intent,
-    loan_grade,
-    loan_amnt,
-    loan_int_rate,
-    loan_percent_income,
-):
-    # 1) Raw input as DataFrame
-    data = {
+# -----------------------------------------------------------
+# PREPROCESSING FUNCTION
+# -----------------------------------------------------------
+def preprocess_single_sample():
+    df = pd.DataFrame([{
         "person_age": person_age,
         "person_income": person_income,
         "person_emp_length": person_emp_length,
@@ -217,90 +171,125 @@ def preprocess_and_predict(
         "cb_person_cred_hist_length": cb_person_cred_hist_length,
         "person_home_ownership": person_home_ownership,
         "loan_intent": loan_intent,
-    }
+    }])
 
-    df = pd.DataFrame([data])
-
-    # 2) Map binary + ordinal exactly like training
+    # Binary encoding
     df["cb_person_default_on_file"] = df["cb_person_default_on_file"].map({"Y": 1, "N": 0})
 
+    # Ordinal encoding for grade
     grade_map = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
     df["loan_grade"] = df["loan_grade"].map(grade_map)
 
-    # 3) One-hot encode categorical variables
+    # One-hot encode categorical vars
     df = pd.get_dummies(df)
 
-    # 4) Align with model's feature set
-    booster = model.get_booster()
-    model_features = booster.feature_names
-
-    # Ensure all expected features are present
-    missing_cols = set(model_features) - set(df.columns)
-    for col in missing_cols:
-        df[col] = 0
-
+    # Align with model features
+    model_features = model.get_booster().feature_names
+    for col in model_features:
+        if col not in df:
+            df[col] = 0
     df = df[model_features]
 
-    # 5) Scale EXACTLY the columns used in training
-    cols_to_scale = SCALER_COLS
-    df[cols_to_scale] = scaler.transform(df[cols_to_scale])
+    # Scale numeric columns
+    df[SCALER_COLS] = scaler.transform(df[SCALER_COLS])
 
-    # 6) Predict probability & class
-    proba_default = model.predict_proba(df)[0][1]
-    pred_class = int(proba_default >= 0.5)
+    return df
 
-    return proba_default, pred_class
+# -----------------------------------------------------------
+# GAUGE FIGURE
+# -----------------------------------------------------------
+def build_gauge(probability: float):
+    """probability in [0,1]"""
+    value = probability * 100
 
-
-# --------------------------------------------------
-# RUN PREDICTION
-# --------------------------------------------------
-if submit:
-    proba, pred_class = preprocess_and_predict(
-        model=model,
-        scaler=scaler,
-        person_age=person_age,
-        person_income=person_income,
-        person_emp_length=person_emp_length,
-        cb_person_cred_hist_length=cb_person_cred_hist_length,
-        person_home_ownership=person_home_ownership,
-        cb_person_default_on_file=cb_person_default_on_file,
-        loan_intent=loan_intent,
-        loan_grade=loan_grade,
-        loan_amnt=loan_amnt,
-        loan_int_rate=loan_int_rate,
-        loan_percent_income=loan_percent_income,
-    )
-
-    st.markdown("---")
-    st.markdown('<div class="card"><h3>📊 Prediction Result</h3>', unsafe_allow_html=True)
-
-    st.write(f"**Estimated Default Probability:** `{proba*100:.2f}%`")
-
-    col_left, col_right = st.columns([2, 1])
-
-    with col_left:
-        if pred_class == 1:
-            st.error("🔴 **High Default Risk** – This client is likely to default on the loan.")
-        else:
-            st.success("🟢 **Low Default Risk** – This client is unlikely to default on the loan.")
-
-    with col_right:
-        st.write("### Risk Level")
-        if proba < 0.15:
-            st.success("🟢 Low risk")
-        elif proba < 0.35:
-            st.warning("🟡 Medium risk")
-        else:
-            st.error("🔴 High risk")
-
-        st.write(
-            """
-            **Scale:**  
-            - < 15% → Low risk  
-            - 15–35% → Medium risk  
-            - > 35% → High risk  
-            """
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=value,
+            number={'suffix': '%'},
+            gauge={
+                'axis': {'range': [0, 100]},
+                'bar': {'color': "#2563EB"},
+                'steps': [
+                    {'range': [0, 15], 'color': "#16a34a"},
+                    {'range': [15, 35], 'color': "#facc15"},
+                    {'range': [35, 100], 'color': "#ef4444"},
+                ],
+            },
         )
+    )
+    fig.update_layout(margin=dict(t=10, b=10, l=10, r=10))
+    return fig
+
+# -----------------------------------------------------------
+# MAIN PREDICTION
+# -----------------------------------------------------------
+if submitted:
+    # Small animation
+    with st.spinner("Calculating risk..."):
+        progress = st.progress(0)
+        for i in range(0, 101, 20):
+            time.sleep(0.05)
+            progress.progress(i)
+
+        X_single = preprocess_single_sample()
+        prob_default = model.predict_proba(X_single)[0, 1]
+        progress.empty()
+
+    # Risk label
+    if prob_default < 0.15:
+        risk_label = "🟢 Low Risk"
+    elif prob_default < 0.35:
+        risk_label = "🟡 Medium Risk"
+    else:
+        risk_label = "🔴 High Risk"
+
+    st.markdown("<div class='block'>", unsafe_allow_html=True)
+    st.markdown("### 📊 Prediction Result")
+
+    col_res, col_gauge = st.columns([1.4, 1])
+
+    with col_res:
+        st.write(f"**Estimated Default Probability:** `{prob_default*100:.2f}%`")
+        st.write(f"**Risk Level:** {risk_label}")
+        st.write("""
+        **Risk Scale**  
+        • < 15% → Low risk  
+        • 15–35% → Medium risk  
+        • > 35% → High risk  
+        """)
+
+    with col_gauge:
+        st.plotly_chart(build_gauge(prob_default), use_container_width=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # -------------------------------------------------------
+    # SHAP EXPLANATION
+    # -------------------------------------------------------
+    st.markdown("<div class='block'>", unsafe_allow_html=True)
+    st.markdown("### 🔍 Why this prediction? (SHAP explanation)")
+
+    shap_values = explainer.shap_values(X_single)
+
+    # XGBoost + SHAP returns list for multi-class; we need the "default" class
+    if isinstance(shap_values, list):
+        # class 1 = default
+        shap_row = shap_values[1][0]
+    else:
+        shap_row = shap_values[0]
+
+    contrib = pd.Series(shap_row, index=X_single.columns)
+    contrib = contrib.reindex(contrib.abs().sort_values(ascending=False).index)
+
+    top_features = contrib.iloc[:6]
+
+    st.write("Positive SHAP value → pushes **toward default**. Negative → pushes **away from default**.")
+
+    fig, ax = plt.subplots()
+    top_features[::-1].plot(kind="barh", ax=ax)
+    ax.set_xlabel("SHAP value (impact on default probability)")
+    ax.set_ylabel("Feature")
+    st.pyplot(fig)
 
     st.markdown("</div>", unsafe_allow_html=True)
