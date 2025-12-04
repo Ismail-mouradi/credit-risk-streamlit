@@ -9,8 +9,6 @@ Original file is located at
 
 # streamlit_app.py
 
-import time
-
 import joblib
 import numpy as np
 import pandas as pd
@@ -319,15 +317,20 @@ with tab_single:
         # ---------- 1) Seaborn barplot (Top features) ----------
         topN = 10
         top_df = shap_df.head(topN).copy()
-        top_df["color"] = top_df["shap"].apply(lambda v: "#ef4444" if v > 0 else "#3b82f6")
 
         plt.figure(figsize=(8, 5))
-        sns.barplot(
+        ax = sns.barplot(
             data=top_df,
             x="shap",
             y="pretty",
-            palette=top_df["color"],
+            color="#60a5fa",  # base color, then override per bar
         )
+
+        # Color each bar: red if SHAP > 0, blue if SHAP < 0
+        for i, val in enumerate(top_df["shap"]):
+            bar_color = "#ef4444" if val > 0 else "#3b82f6"
+            ax.patches[i].set_color(bar_color)
+
         plt.axvline(0, color="black", linewidth=1)
         plt.title("Top Factors Influencing Default Risk")
         plt.xlabel("SHAP Value (Impact on Risk)")
@@ -384,6 +387,7 @@ with tab_single:
                     data=X.iloc[0],
                     feature_names=[prettify_feature_name(f) for f in X.columns],
                 )
+                # Legacy waterfall for better compatibility
                 shap.plots._waterfall.waterfall_legacy(shap_exp, max_display=12, show=False)
                 fig_w = plt.gcf()
                 st.pyplot(fig_w)
@@ -445,7 +449,7 @@ with tab_batch:
                 labels=["Low", "Medium", "High"],
             )
 
-            st.write("📊 Results:", df_output.head())
+            st.write("📊 Results (first rows):", df_output.head())
 
             csv_bytes = df_output.to_csv(index=False).encode("utf-8")
             st.download_button(
