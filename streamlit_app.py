@@ -7,52 +7,30 @@ Original file is located at
     https://colab.research.google.com/drive/1M0gY5vmJM_Od6sB1JYtAb_ZEl99MF4uz
 """
 
-# streamlit_app.py
-
-import joblib
+    
+         import streamlit as st
 import numpy as np
 import pandas as pd
-import seaborn as sns
+import joblib
 import shap
 import matplotlib.pyplot as plt
-import plotly.graph_objects as go
-import streamlit as st
-import streamlit.components.v1 as components
+import seaborn as sns
 
-# -----------------------------------------------------------
-# PAGE CONFIG
-# -----------------------------------------------------------
-st.set_page_config(
-    page_title="Credit Risk Prediction",
-    page_icon="💳",
-    layout="wide",
-)
+# ----------------------------
+# Load model & preprocessing
+# ----------------------------
+model = joblib.load("xgboost_credit_model.pkl")
+scaler = joblib.load("scaler.pkl")
 
-sns.set_theme(style="whitegrid")
-
-# -----------------------------------------------------------
-# LOAD MODEL, SCALER, SHAP EXPLAINER
-# -----------------------------------------------------------
-@st.cache_resource
-def load_objects():
-    model = joblib.load("xgboost_credit_model.pkl")
-    scaler = joblib.load("scaler.pkl")
-    explainer = shap.TreeExplainer(model)
-    return model, scaler, explainer
-
-model, scaler, explainer = load_objects()
-SCALER_COLS = scaler.feature_names_in_  # numeric columns scaled in training
-
-
-# -----------------------------------------------------------
-# HELPER: HUMAN-READABLE FEATURE NAMES
-# -----------------------------------------------------------
-def prettify_feature_name(name: str) -> str:
-    base_map = {
+# ----------------------------
+# Pretty Feature Names for SHAP
+# ----------------------------
+def prettify_feature_name(name):
+    mapping = {
         "person_age": "Age",
         "person_income": "Income",
-        "person_emp_length": "Employment Length",
-        "cb_person_cred_hist_length": "Credit History Length",
+        "person_emp_length": "Employment Length (yrs)",
+        "cb_person_cred_hist_length": "Credit History Length (yrs)",
         "loan_grade": "Loan Grade",
         "loan_amnt": "Loan Amount",
         "loan_int_rate": "Interest Rate",
@@ -60,414 +38,162 @@ def prettify_feature_name(name: str) -> str:
         "cb_person_default_on_file": "Previous Default",
     }
 
-    if name in base_map:
-        return base_map[name]
+    if name in mapping:
+        return mapping[name]
 
     if name.startswith("person_home_ownership_"):
-        value = name.split("person_home_ownership_")[1]
-        return f"Home Ownership: {value}"
+        return "Home Ownership: " + name.split("_")[-1]
 
     if name.startswith("loan_intent_"):
-        value = name.split("loan_intent_")[1]
-        return f"Loan Intent: {value}"
+        return "Loan Intent: " + name.split("_")[-1]
 
-    return name  # fallback
-
-
-# -----------------------------------------------------------
-# PREPROCESSING
-# -----------------------------------------------------------
-def preprocess(df_raw: pd.DataFrame) -> pd.DataFrame:
-    df = df_raw.copy()
-
-    # Binary
-    df["cb_person_default_on_file"] = df["cb_person_default_on_file"].map({"Y": 1, "N": 0})
-
-    # Ordinal grade
-    grade_map = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
-    df["loan_grade"] = df["loan_grade"].map(grade_map)
-
-    # One-hot encode categoricals
-    df = pd.get_dummies(df)
-
-    # Align with model features
-    model_features = model.get_booster().feature_names
-    for col in model_features:
-        if col not in df:
-            df[col] = 0
-
-    df = df[model_features]
-
-    # Scale numeric columns
-    df[SCALER_COLS] = scaler.transform(df[SCALER_COLS])
-
-    return df
+    return name
 
 
-# -----------------------------------------------------------
-# GAUGE CHART
-# -----------------------------------------------------------
-def make_gauge(prob: float):
-    value = prob * 100
-    fig = go.Figure(
-        go.Indicator(
-            mode="gauge+number",
-            value=value,
-            number={"suffix": "%"},
-            gauge={
-                "axis": {"range": [0, 100]},
-                "steps": [
-                    {"range": [0, 15], "color": "#c7f9cc"},
-                    {"range": [15, 35], "color": "#fef9c3"},
-                    {"range": [35, 100], "color": "#fecaca"},
-                ],
-                "bar": {"color": "#2563eb"},
-            },
-        )
+# ------------------------------------
+# Streamlit Setup
+# ------------------------------------
+st.set_page_config(page_title="Credit Risk Prediction", layout="wide")
+
+st.title("💳 Credit Risk Prediction App")
+st.write("Enter client and loan details to predict default probability.")
+
+
+# ------------------------------------
+# User Input Form
+# ------------------------------------
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("Client Information")
+
+    age = st.number_input("Age", 18, 100, 30)
+    income = st.number_input("Annual Income ($)", 1000, 500000, 50000)
+    emp_length = st.number_input("Employment Length (years)", 0, 60, 5)
+    cred_length = st.number_input("Credit History Length (years)", 0, 40, 10)
+
+    home_ownership = st.selectbox(
+        "Home Ownership", ["RENT", "OWN", "MORTGAGE", "OTHER"]
     )
-    fig.update_layout(height=260, margin=dict(t=30, b=10, l=20, r=20))
-    return fig
+    default_before = st.selectbox("Has Defaulted Before?", ["Y", "N"])
+
+with col2:
+    st.subheader("Loan Information")
+
+    loan_intent = st.selectbox(
+        "Loan Intent",
+        [
+            "PERSONAL",
+            "EDUCATION",
+            "MEDICAL",
+            "VENTURE",
+            "HOMEIMPROVEMENT",
+            "DEBTCONSOLIDATION",
+        ],
+    )
+
+    loan_grade = st.selectbox("Loan Grade", ["A", "B", "C", "D", "E", "F", "G"])
+    loan_amnt = st.number_input("Loan Amount ($)", 500, 50000, 10000)
+    interest_rate = st.number_input("Interest Rate (%)", 1.0, 40.0, 10.0)
+    dti = st.number_input("Loan % Income (DTI)", 0.01, 1.0, 0.20)
 
 
-# -----------------------------------------------------------
-# LIGHT THEME / CARD CSS
-# -----------------------------------------------------------
-st.markdown(
-    """
-<style>
-.stApp {
-    background-color: #f7f9fc;
+# ------------------------------------
+# Build Input Row
+# ------------------------------------
+input_dict = {
+    "person_age": age,
+    "person_income": income,
+    "person_emp_length": emp_length,
+    "cb_person_cred_hist_length": cred_length,
+    "loan_grade": loan_grade,
+    "loan_amnt": loan_amnt,
+    "loan_int_rate": interest_rate,
+    "loan_percent_income": dti,
+    "cb_person_default_on_file": default_before,
+    "person_home_ownership": home_ownership,
+    "loan_intent": loan_intent,
 }
 
-.block {
-    background-color: #ffffff;
-    padding: 20px;
-    border-radius: 12px;
-    border: 1px solid #e2e8f0;
-    margin-bottom: 18px;
-}
+df = pd.DataFrame([input_dict])
 
-.stButton>button {
-    width: 100%;
-    border-radius: 8px;
-    background-color: #2563eb !important;
-    color: white !important;
-    height: 3em;
-    font-size: 1.05em;
-    border: none;
-}
+# One-hot encoding (same as training)
+df = pd.get_dummies(df)
 
-input, select, textarea {
-    color: #111827 !important;
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
+# Align columns with model
+model_features = model.get_booster().feature_names
+X = df.reindex(columns=model_features, fill_value=0)
 
-# -----------------------------------------------------------
-# SIDEBAR
-# -----------------------------------------------------------
-st.sidebar.title("ℹ️ About this app")
-st.sidebar.write(
-    """
-This app predicts the probability that a client will **default on a loan**.
+# Scale numerical features
+num_cols = [
+    "person_age",
+    "person_income",
+    "person_emp_length",
+    "cb_person_cred_hist_length",
+    "loan_amnt",
+    "loan_int_rate",
+    "loan_percent_income",
+]
 
-**Includes:**
-- End-to-end preprocessing  
-- XGBoost credit-risk model  
-- Single & batch prediction  
-- SHAP explainability (bar, force, decision, waterfall)  
-"""
-)
-
-st.sidebar.markdown("---")
-st.sidebar.write("**Risk interpretation:**")
-st.sidebar.write("- Higher **DTI** (Loan % Income) → more risk")
-st.sidebar.write("- Worse **Loan Grade** → more risk")
-st.sidebar.write("- Longer **Credit History** usually reduces risk")
-
-# -----------------------------------------------------------
-# MAIN HEADER
-# -----------------------------------------------------------
-st.title("💳 Credit Risk Prediction (XGBoost)")
-st.write("Use the form for a **single client** or upload a CSV for **batch scoring**.")
-st.markdown("---")
-
-tab_single, tab_batch = st.tabs(["🔍 Single Prediction", "📂 Batch Prediction"])
+X[num_cols] = scaler.transform(X[num_cols])
 
 
-# ===========================================================
-# 🔍 SINGLE PREDICTION TAB
-# ===========================================================
-with tab_single:
+# ------------------------------------
+# Predict + SHAP
+# ------------------------------------
+if st.button("🚀 Predict Default Risk"):
 
-    with st.form("single_form"):
+    prob = model.predict_proba(X)[0][1]
+    st.subheader(f"Estimated Probability of Default: **{prob*100:.2f}%**")
 
-        col1, col2 = st.columns(2)
+    # Risk color message
+    if prob < 0.15:
+        st.success("🟢 Low Risk — Client unlikely to default.")
+    elif prob < 0.35:
+        st.warning("🟡 Medium Risk — Some risk present.")
+    else:
+        st.error("🔴 High Risk — High likelihood of default.")
 
-        # ----- CLIENT INFO -----
-        with col1:
-            st.markdown("<div class='block'><h3>👤 Client Information</h3>", unsafe_allow_html=True)
+    # ----------------------------------------------------
+    # SHAP Summary — Top Contributing Factors (Bar Plot)
+    # ----------------------------------------------------
+    st.subheader("🔍 SHAP Feature Impact (Top Predictors)")
 
-            age = st.number_input("Age", 18, 100, 30)
-            income = st.number_input("Annual Income ($)", 0, 5_000_000, 50_000)
-            emp_len = st.number_input("Employment Length (years)", 0, 50, 5)
-            cred_hist = st.number_input("Credit History Length (years)", 0, 50, 10)
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X)
 
-            home_own = st.selectbox("Home Ownership", ["RENT", "OWN", "MORTGAGE", "OTHER"])
-            prev_default = st.selectbox("Has Defaulted Before?", ["N", "Y"])
+    if isinstance(shap_values, list):
+        shap_row = shap_values[1][0]
+    else:
+        shap_row = shap_values[0]
 
-            st.markdown("</div>", unsafe_allow_html=True)
+    shap_df = pd.DataFrame({
+        "feature": X.columns,
+        "shap": shap_row,
+        "abs_val": np.abs(shap_row)
+    }).sort_values("abs_val", ascending=False)
 
-        # ----- LOAN INFO -----
-        with col2:
-            st.markdown("<div class='block'><h3>💰 Loan Information</h3>", unsafe_allow_html=True)
+    shap_df["pretty"] = shap_df["feature"].apply(prettify_feature_name)
 
-            loan_intent = st.selectbox(
-                "Loan Intent",
-                ["PERSONAL", "EDUCATION", "MEDICAL", "VENTURE", "HOMEIMPROVEMENT", "DEBTCONSOLIDATION"],
-            )
-            loan_grade = st.selectbox("Loan Grade", ["A", "B", "C", "D", "E", "F", "G"])
-            loan_amnt = st.number_input("Loan Amount ($)", 500, 50_000, 10_000)
-            loan_rate = st.number_input("Interest Rate (%)", 0.0, 40.0, 10.0)
-            loan_pct_income = st.number_input("Loan Percent Income (DTI)", 0.0, 1.0, 0.20)
+    # Take top 10 features
+    top_df = shap_df.head(10)
 
-            st.markdown("</div>", unsafe_allow_html=True)
+    # Plot
+    plt.figure(figsize=(8, 6))
+    ax = sns.barplot(
+        data=top_df,
+        x="shap",
+        y="pretty",
+        color="#93c5fd",
+    )
 
-        submitted = st.form_submit_button("🔎 Predict Risk")
+    # Color bars (red = increases risk, blue = decreases risk)
+    for i, val in enumerate(top_df["shap"]):
+        ax.patches[i].set_color("#ef4444" if val > 0 else "#3b82f6")
 
-    if submitted:
-        raw = pd.DataFrame(
-            [
-                {
-                    "person_age": age,
-                    "person_income": income,
-                    "person_emp_length": emp_len,
-                    "cb_person_cred_hist_length": cred_hist,
-                    "person_home_ownership": home_own,
-                    "cb_person_default_on_file": prev_default,
-                    "loan_intent": loan_intent,
-                    "loan_grade": loan_grade,
-                    "loan_amnt": loan_amnt,
-                    "loan_int_rate": loan_rate,
-                    "loan_percent_income": loan_pct_income,
-                }
-            ]
-        )
+    plt.axvline(0, color="black", linestyle="--")
+    plt.xlabel("SHAP Impact (positive = higher risk)")
+    plt.ylabel("")
+    plt.title("Top Features Influencing Default Risk")
 
-        X = preprocess(raw)
-        prob = model.predict_proba(X)[0, 1]
-
-        if prob < 0.15:
-            risk_label = "🟢 Low Risk"
-        elif prob < 0.35:
-            risk_label = "🟡 Medium Risk"
-        else:
-            risk_label = "🔴 High Risk"
-
-        # ----- RESULT CARD -----
-        st.markdown("<div class='block'>", unsafe_allow_html=True)
-        st.subheader("Prediction Result")
-
-        rc1, rc2 = st.columns([1, 1])
-        with rc1:
-            st.write(f"### Default Probability: **{prob*100:.2f}%**")
-            st.write(f"### Risk Level: **{risk_label}**")
-            st.write(
-                """
-**Scale:**  
-- < 15% → Low risk  
-- 15–35% → Medium risk  
-- > 35% → High risk
-                """
-            )
-        with rc2:
-            st.plotly_chart(make_gauge(prob), use_container_width=True)
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        # =======================================================
-        # ADVANCED SHAP EXPLANATION
-        # =======================================================
-        st.markdown("<div class='block'>", unsafe_allow_html=True)
-        st.subheader("🔍 SHAP Explainability — Why This Prediction?")
-
-        shap_values = explainer.shap_values(X)
-
-        # Handle binary classification output shape
-        if isinstance(shap_values, list):
-            shap_row = shap_values[1][0]
-            base_value = explainer.expected_value[1]
-        else:
-            shap_row = shap_values[0]
-            base_value = explainer.expected_value
-
-        shap_df = pd.DataFrame(
-            {
-                "feature": X.columns,
-                "shap": shap_row,
-                "abs_shap": np.abs(shap_row),
-                "value": X.iloc[0],
-            }
-        )
-        shap_df["pretty"] = shap_df["feature"].apply(prettify_feature_name)
-        shap_df = shap_df.sort_values("abs_shap", ascending=False)
-
-        # ---------- 1) Seaborn barplot (Top features) ----------
-        topN = 10
-        top_df = shap_df.head(topN).copy()
-
-        plt.figure(figsize=(8, 5))
-        ax = sns.barplot(
-            data=top_df,
-            x="shap",
-            y="pretty",
-            color="#60a5fa",  # base color, then override per bar
-        )
-
-        # Color each bar: red if SHAP > 0, blue if SHAP < 0
-        for i, val in enumerate(top_df["shap"]):
-            bar_color = "#ef4444" if val > 0 else "#3b82f6"
-            ax.patches[i].set_color(bar_color)
-
-        plt.axvline(0, color="black", linewidth=1)
-        plt.title("Top Factors Influencing Default Risk")
-        plt.xlabel("SHAP Value (Impact on Risk)")
-        plt.ylabel("")
-        st.pyplot(plt)
-
-        # ---------- 2) Force plot (interactive, Streamlit-safe) ----------
-        with st.expander("📊 SHAP Force Plot"):
-            st.write("Shows how each feature pushes the prediction **higher (red)** or **lower (blue)**.")
-
-            try:
-                force_plot = shap.force_plot(
-                    base_value,
-                    shap_row,
-                    X,
-                    feature_names=[prettify_feature_name(f) for f in X.columns],
-                    matplotlib=False,
-                )
-
-                html = f"""
-                <html>
-                    <head>{shap.getjs()}</head>
-                    <body>{force_plot.html()}</body>
-                </html>
-                """
-                components.html(html, height=300)
-
-            except Exception as e:
-                st.info(f"Force plot not available: {e}")
-
-        # ---------- 3) Decision plot ----------
-        with st.expander("🧠 SHAP Decision Plot"):
-            st.write("Shows the cumulative effect of features on the final prediction.")
-            try:
-                shap.decision_plot(
-                    base_value,
-                    shap_row,
-                    feature_names=[prettify_feature_name(f) for f in X.columns],
-                    show=False,
-                )
-                fig_dec = plt.gcf()
-                st.pyplot(fig_dec)
-                plt.clf()
-            except Exception as e:
-                st.info(f"Decision plot not available: {e}")
-
-        # ---------- 4) Waterfall plot ----------
-        with st.expander("📉 SHAP Waterfall Plot"):
-    st.write("Step-by-step contribution of each feature to the prediction.")
-
-    try:
-        # SHAP gives base_value as a scalar for single prediction
-        if isinstance(explainer.expected_value, list):
-            base_val = explainer.expected_value[1]
-        else:
-            base_val = explainer.expected_value
-
-        # Build old-style explanation dictionary
-        shap_exp = {
-            "values": shap_row,
-            "base_values": base_val,
-            "data": X.iloc[0].values,
-            "feature_names": [prettify_feature_name(f) for f in X.columns],
-        }
-
-        # Use legacy waterfall (works on Streamlit Cloud)
-        shap.plots._waterfall.waterfall_legacy(shap_exp, max_display=12, show=False)
-
-        fig = plt.gcf()
-        st.pyplot(fig)
-        plt.clf()
-
-    except Exception as e:
-        st.info(f"Waterfall plot not available: {e}")
-
-        # ---------- 5) Natural language summary ----------
-        st.subheader("📝 Risk Interpretation Summary")
-
-        top_pos = shap_df[shap_df["shap"] > 0].head(3)
-        top_neg = shap_df[shap_df["shap"] < 0].head(3)
-
-        summary = "### 📌 Main Drivers\n\n"
-
-        if len(top_pos) > 0:
-            summary += "**Factors that increase risk:**\n"
-            for _, row in top_pos.iterrows():
-                summary += f"- **{prettify_feature_name(row['feature'])}** increases default risk.\n"
-        else:
-            summary += "- No strong factors clearly increasing risk.\n"
-
-        summary += "\n"
-
-        if len(top_neg) > 0:
-            summary += "**Factors that reduce risk:**\n"
-            for _, row in top_neg.iterrows():
-                summary += f"- **{prettify_feature_name(row['feature'])}** helps reduce default risk.\n"
-        else:
-            summary += "- No strong factors clearly reducing risk.\n"
-
-        st.markdown(summary)
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ===========================================================
-# 📂 BATCH PREDICTION TAB
-# ===========================================================
-with tab_batch:
-    st.markdown("<div class='block'><h3>📂 Batch CSV Prediction</h3>", unsafe_allow_html=True)
-    st.write("Upload a CSV with the same columns as the original dataset to score many clients at once.")
-
-    uploaded = st.file_uploader("Upload CSV file", type=["csv"])
-
-    if uploaded is not None:
-        df_input = pd.read_csv(uploaded)
-        st.write("Preview:", df_input.head())
-
-        try:
-            X_batch = preprocess(df_input)
-            probs = model.predict_proba(X_batch)[:, 1]
-
-            df_output = df_input.copy()
-            df_output["default_probability"] = probs
-            df_output["risk"] = pd.cut(
-                probs,
-                bins=[0, 0.15, 0.35, 1.0],
-                labels=["Low", "Medium", "High"],
-            )
-
-            st.write("📊 Results (first rows):", df_output.head())
-
-            csv_bytes = df_output.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "⬇️ Download Full Results CSV",
-                csv_bytes,
-                "credit_risk_predictions.csv",
-                "text/csv",
-            )
-        except Exception as e:
-            st.error(f"Error while scoring batch: {e}")
+    st.pyplot(plt)
