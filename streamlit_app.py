@@ -7,15 +7,49 @@ Original file is located at
     https://colab.research.google.com/drive/1M0gY5vmJM_Od6sB1JYtAb_ZEl99MF4uz
 """
 
-# ===========================================================
-# FULL SHAP INTERPRETABILITY SECTION (ADVANCED)
-# ===========================================================
+# streamlit_app.py
 
+import time
+
+import joblib
+import numpy as np
+import pandas as pd
+import seaborn as sns
 import shap
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import streamlit as st
+import streamlit.components.v1 as components
+
+# -----------------------------------------------------------
+# PAGE CONFIG
+# -----------------------------------------------------------
+st.set_page_config(
+    page_title="Credit Risk Prediction",
+    page_icon="💳",
+    layout="wide",
+)
+
+sns.set_theme(style="whitegrid")
+
+# -----------------------------------------------------------
+# LOAD MODEL, SCALER, SHAP EXPLAINER
+# -----------------------------------------------------------
+@st.cache_resource
+def load_objects():
+    model = joblib.load("xgboost_credit_model.pkl")
+    scaler = joblib.load("scaler.pkl")
+    explainer = shap.TreeExplainer(model)
+    return model, scaler, explainer
+
+model, scaler, explainer = load_objects()
+SCALER_COLS = scaler.feature_names_in_  # numeric columns scaled in training
 
 
-def prettify_feature_name(name):
-    """Turn encoded feature names into human-readable labels."""
+# -----------------------------------------------------------
+# HELPER: HUMAN-READABLE FEATURE NAMES
+# -----------------------------------------------------------
+def prettify_feature_name(name: str) -> str:
     base_map = {
         "person_age": "Age",
         "person_income": "Income",
@@ -32,151 +66,393 @@ def prettify_feature_name(name):
         return base_map[name]
 
     if name.startswith("person_home_ownership_"):
-        return f"Home Ownership: {name.split('person_home_ownership_')[1]}"
+        value = name.split("person_home_ownership_")[1]
+        return f"Home Ownership: {value}"
 
     if name.startswith("loan_intent_"):
-        return f"Loan Intent: {name.split('loan_intent_')[1]}"
+        value = name.split("loan_intent_")[1]
+        return f"Loan Intent: {value}"
 
     return name  # fallback
 
 
-# ----------------------- COMPUTE SHAP -------------------------
-st.markdown("<div class='block'>", unsafe_allow_html=True)
-st.subheader("🔍 SHAP Explainability — Why This Prediction?")
+# -----------------------------------------------------------
+# PREPROCESSING
+# -----------------------------------------------------------
+def preprocess(df_raw: pd.DataFrame) -> pd.DataFrame:
+    df = df_raw.copy()
 
-shap_values = explainer.shap_values(X)
+    # Binary
+    df["cb_person_default_on_file"] = df["cb_person_default_on_file"].map({"Y": 1, "N": 0})
 
-# XGBoost sometimes returns list: [class0, class1]
-if isinstance(shap_values, list):
-    shap_row = shap_values[1][0]
-    base_value = explainer.expected_value[1]
-else:
-    shap_row = shap_values[0]
-    base_value = explainer.expected_value
+    # Ordinal grade
+    grade_map = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
+    df["loan_grade"] = df["loan_grade"].map(grade_map)
 
-# Build DataFrame
-shap_df = pd.DataFrame({
-    "feature": X.columns,
-    "value": X.iloc[0],
-    "shap": shap_row,
-    "abs_shap": np.abs(shap_row)
-})
+    # One-hot encode categoricals
+    df = pd.get_dummies(df)
 
-shap_df["pretty"] = shap_df["feature"].apply(prettify_feature_name)
-shap_df = shap_df.sort_values("abs_shap", ascending=False)
+    # Align with model features
+    model_features = model.get_booster().feature_names
+    for col in model_features:
+        if col not in df:
+            df[col] = 0
+
+    df = df[model_features]
+
+    # Scale numeric columns
+    df[SCALER_COLS] = scaler.transform(df[SCALER_COLS])
+
+    return df
+
+
+# -----------------------------------------------------------
+# GAUGE CHART
+# -----------------------------------------------------------
+def make_gauge(prob: float):
+    value = prob * 100
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=value,
+            number={"suffix": "%"},
+            gauge={
+                "axis": {"range": [0, 100]},
+                "steps": [
+                    {"range": [0, 15], "color": "#c7f9cc"},
+                    {"range": [15, 35], "color": "#fef9c3"},
+                    {"range": [35, 100], "color": "#fecaca"},
+                ],
+                "bar": {"color": "#2563eb"},
+            },
+        )
+    )
+    fig.update_layout(height=260, margin=dict(t=30, b=10, l=20, r=20))
+    return fig
+
+
+# -----------------------------------------------------------
+# LIGHT THEME / CARD CSS
+# -----------------------------------------------------------
+st.markdown(
+    """
+<style>
+.stApp {
+    background-color: #f7f9fc;
+}
+
+.block {
+    background-color: #ffffff;
+    padding: 20px;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    margin-bottom: 18px;
+}
+
+.stButton>button {
+    width: 100%;
+    border-radius: 8px;
+    background-color: #2563eb !important;
+    color: white !important;
+    height: 3em;
+    font-size: 1.05em;
+    border: none;
+}
+
+input, select, textarea {
+    color: #111827 !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+# -----------------------------------------------------------
+# SIDEBAR
+# -----------------------------------------------------------
+st.sidebar.title("ℹ️ About this app")
+st.sidebar.write(
+    """
+This app predicts the probability that a client will **default on a loan**.
+
+**Includes:**
+- End-to-end preprocessing  
+- XGBoost credit-risk model  
+- Single & batch prediction  
+- SHAP explainability (bar, force, decision, waterfall)  
+"""
+)
+
+st.sidebar.markdown("---")
+st.sidebar.write("**Risk interpretation:**")
+st.sidebar.write("- Higher **DTI** (Loan % Income) → more risk")
+st.sidebar.write("- Worse **Loan Grade** → more risk")
+st.sidebar.write("- Longer **Credit History** usually reduces risk")
+
+# -----------------------------------------------------------
+# MAIN HEADER
+# -----------------------------------------------------------
+st.title("💳 Credit Risk Prediction (XGBoost)")
+st.write("Use the form for a **single client** or upload a CSV for **batch scoring**.")
+st.markdown("---")
+
+tab_single, tab_batch = st.tabs(["🔍 Single Prediction", "📂 Batch Prediction"])
 
 
 # ===========================================================
-# 1) ⭐ BEAUTIFUL SEABORN BARPLOT (TOP 10 IMPACT FEATURES)
+# 🔍 SINGLE PREDICTION TAB
 # ===========================================================
-topN = 10
-top_df = shap_df.head(topN).copy()
-top_df["color"] = top_df["shap"].apply(lambda v: "#ef4444" if v > 0 else "#3b82f6")
+with tab_single:
 
-plt.figure(figsize=(8, 5))
-sns.barplot(data=top_df, y="pretty", x="shap", palette=top_df["color"])
-plt.axvline(0, color="black", linewidth=1)
-plt.title("Top Factors Influencing Default Risk", fontsize=14)
-plt.xlabel("Impact on Risk (SHAP Value)")
-plt.ylabel("")
-st.pyplot(plt)
+    with st.form("single_form"):
 
+        col1, col2 = st.columns(2)
 
-# ===========================================================
-# 2) ⭐ FORCE PLOT (INTERACTIVE)
-# ===========================================================
-# ---------- 2) Force plot (interactive) ----------
-with st.expander("📊 SHAP Force Plot"):
+        # ----- CLIENT INFO -----
+        with col1:
+            st.markdown("<div class='block'><h3>👤 Client Information</h3>", unsafe_allow_html=True)
 
-    st.write("Shows how each feature pushes the prediction **higher (red)** or **lower (blue)**.")
+            age = st.number_input("Age", 18, 100, 30)
+            income = st.number_input("Annual Income ($)", 0, 5_000_000, 50_000)
+            emp_len = st.number_input("Employment Length (years)", 0, 50, 5)
+            cred_hist = st.number_input("Credit History Length (years)", 0, 50, 10)
 
-    try:
-        force_plot = shap.force_plot(
-            base_value,
-            shap_row,
-            X,
-            feature_names=[prettify_feature_name(f) for f in X.columns],
-            matplotlib=False
+            home_own = st.selectbox("Home Ownership", ["RENT", "OWN", "MORTGAGE", "OTHER"])
+            prev_default = st.selectbox("Has Defaulted Before?", ["N", "Y"])
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # ----- LOAN INFO -----
+        with col2:
+            st.markdown("<div class='block'><h3>💰 Loan Information</h3>", unsafe_allow_html=True)
+
+            loan_intent = st.selectbox(
+                "Loan Intent",
+                ["PERSONAL", "EDUCATION", "MEDICAL", "VENTURE", "HOMEIMPROVEMENT", "DEBTCONSOLIDATION"],
+            )
+            loan_grade = st.selectbox("Loan Grade", ["A", "B", "C", "D", "E", "F", "G"])
+            loan_amnt = st.number_input("Loan Amount ($)", 500, 50_000, 10_000)
+            loan_rate = st.number_input("Interest Rate (%)", 0.0, 40.0, 10.0)
+            loan_pct_income = st.number_input("Loan Percent Income (DTI)", 0.0, 1.0, 0.20)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        submitted = st.form_submit_button("🔎 Predict Risk")
+
+    if submitted:
+        raw = pd.DataFrame(
+            [
+                {
+                    "person_age": age,
+                    "person_income": income,
+                    "person_emp_length": emp_len,
+                    "cb_person_cred_hist_length": cred_hist,
+                    "person_home_ownership": home_own,
+                    "cb_person_default_on_file": prev_default,
+                    "loan_intent": loan_intent,
+                    "loan_grade": loan_grade,
+                    "loan_amnt": loan_amnt,
+                    "loan_int_rate": loan_rate,
+                    "loan_percent_income": loan_pct_income,
+                }
+            ]
         )
 
-        # Works on Streamlit Cloud (no IPython needed)
-        html = f"""
-        <html>
-            <head>
-                {shap.getjs()}
-            </head>
-            <body>
-                {force_plot.html()}
-            </body>
-        </html>
-        """
+        X = preprocess(raw)
+        prob = model.predict_proba(X)[0, 1]
 
-        components.html(html, height=300)
+        if prob < 0.15:
+            risk_label = "🟢 Low Risk"
+        elif prob < 0.35:
+            risk_label = "🟡 Medium Risk"
+        else:
+            risk_label = "🔴 High Risk"
 
-    except Exception as e:
-        st.info(f"Force plot not available: {e}")
+        # ----- RESULT CARD -----
+        st.markdown("<div class='block'>", unsafe_allow_html=True)
+        st.subheader("Prediction Result")
 
+        rc1, rc2 = st.columns([1, 1])
+        with rc1:
+            st.write(f"### Default Probability: **{prob*100:.2f}%**")
+            st.write(f"### Risk Level: **{risk_label}**")
+            st.write(
+                """
+**Scale:**  
+- < 15% → Low risk  
+- 15–35% → Medium risk  
+- > 35% → High risk
+                """
+            )
+        with rc2:
+            st.plotly_chart(make_gauge(prob), use_container_width=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # =======================================================
+        # ADVANCED SHAP EXPLANATION
+        # =======================================================
+        st.markdown("<div class='block'>", unsafe_allow_html=True)
+        st.subheader("🔍 SHAP Explainability — Why This Prediction?")
+
+        shap_values = explainer.shap_values(X)
+
+        # Handle binary classification output shape
+        if isinstance(shap_values, list):
+            shap_row = shap_values[1][0]
+            base_value = explainer.expected_value[1]
+        else:
+            shap_row = shap_values[0]
+            base_value = explainer.expected_value
+
+        shap_df = pd.DataFrame(
+            {
+                "feature": X.columns,
+                "shap": shap_row,
+                "abs_shap": np.abs(shap_row),
+                "value": X.iloc[0],
+            }
+        )
+        shap_df["pretty"] = shap_df["feature"].apply(prettify_feature_name)
+        shap_df = shap_df.sort_values("abs_shap", ascending=False)
+
+        # ---------- 1) Seaborn barplot (Top features) ----------
+        topN = 10
+        top_df = shap_df.head(topN).copy()
+        top_df["color"] = top_df["shap"].apply(lambda v: "#ef4444" if v > 0 else "#3b82f6")
+
+        plt.figure(figsize=(8, 5))
+        sns.barplot(
+            data=top_df,
+            x="shap",
+            y="pretty",
+            palette=top_df["color"],
+        )
+        plt.axvline(0, color="black", linewidth=1)
+        plt.title("Top Factors Influencing Default Risk")
+        plt.xlabel("SHAP Value (Impact on Risk)")
+        plt.ylabel("")
+        st.pyplot(plt)
+
+        # ---------- 2) Force plot (interactive, Streamlit-safe) ----------
+        with st.expander("📊 SHAP Force Plot"):
+            st.write("Shows how each feature pushes the prediction **higher (red)** or **lower (blue)**.")
+
+            try:
+                force_plot = shap.force_plot(
+                    base_value,
+                    shap_row,
+                    X,
+                    feature_names=[prettify_feature_name(f) for f in X.columns],
+                    matplotlib=False,
+                )
+
+                html = f"""
+                <html>
+                    <head>{shap.getjs()}</head>
+                    <body>{force_plot.html()}</body>
+                </html>
+                """
+                components.html(html, height=300)
+
+            except Exception as e:
+                st.info(f"Force plot not available: {e}")
+
+        # ---------- 3) Decision plot ----------
+        with st.expander("🧠 SHAP Decision Plot"):
+            st.write("Shows the cumulative effect of features on the final prediction.")
+            try:
+                shap.decision_plot(
+                    base_value,
+                    shap_row,
+                    feature_names=[prettify_feature_name(f) for f in X.columns],
+                    show=False,
+                )
+                fig_dec = plt.gcf()
+                st.pyplot(fig_dec)
+                plt.clf()
+            except Exception as e:
+                st.info(f"Decision plot not available: {e}")
+
+        # ---------- 4) Waterfall plot ----------
+        with st.expander("📉 SHAP Waterfall Plot"):
+            st.write("Step-by-step contribution of each feature to the prediction.")
+            try:
+                shap_exp = shap.Explanation(
+                    values=shap_row,
+                    base_values=base_value,
+                    data=X.iloc[0],
+                    feature_names=[prettify_feature_name(f) for f in X.columns],
+                )
+                shap.plots._waterfall.waterfall_legacy(shap_exp, max_display=12, show=False)
+                fig_w = plt.gcf()
+                st.pyplot(fig_w)
+                plt.clf()
+            except Exception as e:
+                st.info(f"Waterfall plot not available: {e}")
+
+        # ---------- 5) Natural language summary ----------
+        st.subheader("📝 Risk Interpretation Summary")
+
+        top_pos = shap_df[shap_df["shap"] > 0].head(3)
+        top_neg = shap_df[shap_df["shap"] < 0].head(3)
+
+        summary = "### 📌 Main Drivers\n\n"
+
+        if len(top_pos) > 0:
+            summary += "**Factors that increase risk:**\n"
+            for _, row in top_pos.iterrows():
+                summary += f"- **{prettify_feature_name(row['feature'])}** increases default risk.\n"
+        else:
+            summary += "- No strong factors clearly increasing risk.\n"
+
+        summary += "\n"
+
+        if len(top_neg) > 0:
+            summary += "**Factors that reduce risk:**\n"
+            for _, row in top_neg.iterrows():
+                summary += f"- **{prettify_feature_name(row['feature'])}** helps reduce default risk.\n"
+        else:
+            summary += "- No strong factors clearly reducing risk.\n"
+
+        st.markdown(summary)
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ===========================================================
-# 3) ⭐ DECISION PLOT
+# 📂 BATCH PREDICTION TAB
 # ===========================================================
-with st.expander("🧠 SHAP Decision Plot"):
-    st.write("Shows each feature’s cumulative effect on the final prediction.")
+with tab_batch:
+    st.markdown("<div class='block'><h3>📂 Batch CSV Prediction</h3>", unsafe_allow_html=True)
+    st.write("Upload a CSV with the same columns as the original dataset to score many clients at once.")
 
-    fig_decision = shap.decision_plot(
-        base_value,
-        shap_row,
-        feature_names=[prettify_feature_name(f) for f in X.columns],
-        show=False
-    )
-    st.pyplot(fig_decision)
+    uploaded = st.file_uploader("Upload CSV file", type=["csv"])
 
+    if uploaded is not None:
+        df_input = pd.read_csv(uploaded)
+        st.write("Preview:", df_input.head())
 
-# ===========================================================
-# 4) ⭐ WATERFALL PLOT
-# ===========================================================
-with st.expander("📉 SHAP Waterfall Plot"):
-    st.write("Shows step-by-step how the model arrives at the probability.")
+        try:
+            X_batch = preprocess(df_input)
+            probs = model.predict_proba(X_batch)[:, 1]
 
-    shap_exp = shap.Explanation(
-        values=shap_row,
-        base_values=base_value,
-        data=X.iloc[0],
-        feature_names=[prettify_feature_name(f) for f in X.columns]
-    )
+            df_output = df_input.copy()
+            df_output["default_probability"] = probs
+            df_output["risk"] = pd.cut(
+                probs,
+                bins=[0, 0.15, 0.35, 1.0],
+                labels=["Low", "Medium", "High"],
+            )
 
-    fig_w = shap.waterfall_plot(shap_exp, max_display=12, show=False)
-    st.pyplot(fig_w)
+            st.write("📊 Results:", df_output.head())
 
-
-# ===========================================================
-# 5) ⭐ NATURAL LANGUAGE INTERPRETATION (AI STYLE)
-# ===========================================================
-st.subheader("📝 Risk Interpretation Summary")
-
-# get top contributors
-top_pos = shap_df[shap_df["shap"] > 0].head(3)
-top_neg = shap_df[shap_df["shap"] < 0].head(3)
-
-explanation = "### 📌 Summary of Influential Factors\n\n"
-
-if len(top_pos) > 0:
-    explanation += "**Factors Increasing Risk:**\n"
-    for _, row in top_pos.iterrows():
-        explanation += f"- **{prettify_feature_name(row['feature'])}** increases risk.\n"
-else:
-    explanation += "No major features strongly increased risk.\n"
-
-explanation += "\n"
-
-if len(top_neg) > 0:
-    explanation += "**Factors Decreasing Risk:**\n"
-    for _, row in top_neg.iterrows():
-        explanation += f"- **{prettify_feature_name(row['feature'])}** reduces risk.\n"
-else:
-    explanation += "No major features strongly reduced risk.\n"
-
-st.markdown(explanation)
-
-st.markdown("</div>", unsafe_allow_html=True)
+            csv_bytes = df_output.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇️ Download Full Results CSV",
+                csv_bytes,
+                "credit_risk_predictions.csv",
+                "text/csv",
+            )
+        except Exception as e:
+            st.error(f"Error while scoring batch: {e}")
