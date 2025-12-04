@@ -7,15 +7,14 @@ Original file is located at
     https://colab.research.google.com/drive/1M0gY5vmJM_Od6sB1JYtAb_ZEl99MF4uz
 """
 
-import time
-
 import joblib
-import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
+import numpy as np
 import shap
-import streamlit as st
 import matplotlib.pyplot as plt
+import streamlit as st
+import plotly.graph_objects as go
+import time
 
 # -----------------------------------------------------------
 # PAGE CONFIG
@@ -27,7 +26,7 @@ st.set_page_config(
 )
 
 # -----------------------------------------------------------
-# LOAD MODEL + SCALER + SHAP EXPLAINER
+# LOAD MODELS
 # -----------------------------------------------------------
 @st.cache_resource
 def load_objects():
@@ -37,48 +36,47 @@ def load_objects():
     return model, scaler, explainer
 
 model, scaler, explainer = load_objects()
-SCALER_COLS = scaler.feature_names_in_  # columns scaled in training
+SCALER_COLS = scaler.feature_names_in_
 
 # -----------------------------------------------------------
-# SIMPLE DARK STYLE
+# FIXED DARK THEME + PRO UI
 # -----------------------------------------------------------
 st.markdown("""
 <style>
-body {
-    background-color: #111827;
-    color: #F3F4F6;
+
+body, .stApp {
+    background-color: #0d1117;
+    color: #e6edf3;
 }
 
-/* Titles */
-h1, h2, h3, h4 {
-    color: #F3F4F6 !important;
-    font-weight: 700 !important;
+/* Fix white text in inputs */
+.stTextInput input,
+.stNumberInput input,
+.stSelectbox div[data-baseweb="select"] div {
+    color: #111 !important;           /* black text */
+    background-color: #f0f2f6 !important; /* light grey */
 }
 
 /* Card container */
 .block {
-    background-color: #1F2937;
-    padding: 18px 22px;
+    background-color: #161b22;
+    padding: 20px;
     border-radius: 12px;
-    border: 1px solid #374151;
-    margin-bottom: 16px;
+    border: 1px solid #30363d;
+    margin-bottom: 18px;
 }
 
-/* Inputs */
-.stNumberInput input, .stSelectbox div[data-baseweb="select"] {
-    background-color: #F9FAFB !important;
-    color: #111827 !important;
-}
-
-/* Predict button */
+/* Buttons */
 .stButton>button {
     width: 100%;
     border-radius: 10px;
-    background-color: #2563EB;
-    color: white;
+    background-color: #238636 !important;
+    color: white !important;
     height: 3em;
     font-size: 1.05em;
+    border: 1px solid #2ea043;
 }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -87,209 +85,256 @@ h1, h2, h3, h4 {
 # -----------------------------------------------------------
 st.sidebar.title("ℹ️ About this App")
 st.sidebar.write("""
-This app uses a trained **XGBoost** model to estimate  
-the probability that a client will **default** on a loan.
+A fully interactive **Credit Risk Prediction** tool powered by **XGBoost**.
 
-• Trained on a credit risk dataset  
-• Includes preprocessing (encoding + scaling)  
-• Outputs probability + risk level + explanation
+**Features included:**
+- Single prediction
+- Batch prediction from CSV
+- SHAP explainability
+- Gauge visualization
+- Clean dark UI
 """)
 
 st.sidebar.markdown("---")
 st.sidebar.write("**Tips:**")
-st.sidebar.write("- Higher `loan_percent_income` → more risk")
-st.sidebar.write("- Previous default history strongly increases risk")
-st.sidebar.write("- Loan grade, interest rate & DTI are key drivers")
+st.sidebar.write("- Higher DTI → more risk")
+st.sidebar.write("- High interest rates increase default likelihood")
+st.sidebar.write("- Low grades (E–G) are much riskier")
 
 # -----------------------------------------------------------
 # HEADER
 # -----------------------------------------------------------
-st.markdown("<h1>💳 Credit Risk Prediction</h1>", unsafe_allow_html=True)
-st.write("Fill in the client and loan information below to estimate default risk.")
-
+st.markdown("<h1>💳 Credit Risk Prediction Dashboard</h1>", unsafe_allow_html=True)
+st.write("Predict default risk for a single client or upload a CSV file for batch scoring.")
 st.markdown("---")
 
-# -----------------------------------------------------------
-# FORM INPUTS
-# -----------------------------------------------------------
-with st.form("prediction_form"):
-
-    col_client, col_loan = st.columns(2)
-
-    # ---------- CLIENT INFO ----------
-    with col_client:
-        st.markdown("<div class='block'><h3>👤 Client Information</h3>", unsafe_allow_html=True)
-
-        person_age = st.number_input("Age", 18, 100, 30)
-        person_income = st.number_input("Annual Income ($)", 0, 5_000_000, 50_000)
-        person_emp_length = st.number_input("Employment Length (years)", 0, 50, 5)
-        cb_person_cred_hist_length = st.number_input("Credit History Length (years)", 0, 50, 10)
-
-        person_home_ownership = st.selectbox(
-            "Home Ownership",
-            ["RENT", "OWN", "MORTGAGE", "OTHER"]
-        )
-
-        cb_person_default_on_file = st.selectbox(
-            "Has Defaulted Before?",
-            ["N", "Y"]  # default: No
-        )
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # ---------- LOAN INFO ----------
-    with col_loan:
-        st.markdown("<div class='block'><h3>💰 Loan Information</h3>", unsafe_allow_html=True)
-
-        loan_intent = st.selectbox(
-            "Loan Intent",
-            ["PERSONAL", "EDUCATION", "MEDICAL", "VENTURE", "HOMEIMPROVEMENT", "DEBTCONSOLIDATION"]
-        )
-
-        loan_grade = st.selectbox("Loan Grade", ["A", "B", "C", "D", "E", "F", "G"])
-        loan_amnt = st.number_input("Loan Amount ($)", 500, 40_000, 10_000)
-        loan_int_rate = st.number_input("Interest Rate (%)", 0.0, 40.0, 10.0)
-        loan_percent_income = st.number_input("Loan Percent Income (Loan / Income)", 0.0, 1.0, 0.20)
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    submitted = st.form_submit_button("🔍 Predict Default Risk")
 
 # -----------------------------------------------------------
-# PREPROCESSING FUNCTION
+# GAUGE FUNCTION
 # -----------------------------------------------------------
-def preprocess_single_sample():
-    df = pd.DataFrame([{
-        "person_age": person_age,
-        "person_income": person_income,
-        "person_emp_length": person_emp_length,
-        "loan_grade": loan_grade,
-        "loan_amnt": loan_amnt,
-        "loan_int_rate": loan_int_rate,
-        "loan_percent_income": loan_percent_income,
-        "cb_person_default_on_file": cb_person_default_on_file,
-        "cb_person_cred_hist_length": cb_person_cred_hist_length,
-        "person_home_ownership": person_home_ownership,
-        "loan_intent": loan_intent,
-    }])
-
-    # Binary encoding
-    df["cb_person_default_on_file"] = df["cb_person_default_on_file"].map({"Y": 1, "N": 0})
-
-    # Ordinal encoding for grade
-    grade_map = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
-    df["loan_grade"] = df["loan_grade"].map(grade_map)
-
-    # One-hot encode categorical vars
-    df = pd.get_dummies(df)
-
-    # Align with model features
-    model_features = model.get_booster().feature_names
-    for col in model_features:
-        if col not in df:
-            df[col] = 0
-    df = df[model_features]
-
-    # Scale numeric columns
-    df[SCALER_COLS] = scaler.transform(df[SCALER_COLS])
-
-    return df
-
-# -----------------------------------------------------------
-# GAUGE FIGURE
-# -----------------------------------------------------------
-def build_gauge(probability: float):
-    """probability in [0,1]"""
-    value = probability * 100
-
+def gauge(prob):
+    value = prob * 100
     fig = go.Figure(
         go.Indicator(
             mode="gauge+number",
             value=value,
-            number={'suffix': '%'},
+            number={'suffix': '%', 'font': {'color': 'white'}},
             gauge={
-                'axis': {'range': [0, 100]},
-                'bar': {'color': "#2563EB"},
+                'axis': {'range': [0, 100], 'tickcolor': 'white'},
+                'bar': {'color': "#2ea043"},
                 'steps': [
                     {'range': [0, 15], 'color': "#16a34a"},
                     {'range': [15, 35], 'color': "#facc15"},
                     {'range': [35, 100], 'color': "#ef4444"},
                 ],
-            },
+            }
         )
     )
-    fig.update_layout(margin=dict(t=10, b=10, l=10, r=10))
+    fig.update_layout(
+        paper_bgcolor="#161b22",
+        font={'color': 'white'},
+        margin=dict(t=20, b=20, l=10, r=10)
+    )
     return fig
 
+
 # -----------------------------------------------------------
-# MAIN PREDICTION
+# SHAP FEATURE NAME CLEANING
 # -----------------------------------------------------------
-if submitted:
-    # Small animation
-    with st.spinner("Calculating risk..."):
-        progress = st.progress(0)
-        for i in range(0, 101, 20):
-            time.sleep(0.05)
-            progress.progress(i)
+FEATURE_LABELS = {
+    "person_age": "Age",
+    "person_income": "Income",
+    "person_emp_length": "Employment Length",
+    "loan_grade": "Loan Grade",
+    "loan_amnt": "Loan Amount",
+    "loan_int_rate": "Interest Rate",
+    "loan_percent_income": "Loan Percent of Income (DTI)",
+    "cb_person_default_on_file": "Previous Default",
+    "cb_person_cred_hist_length": "Credit History Length",
+    "person_home_ownership_RENT": "Home Ownership: RENT",
+    "person_home_ownership_OWN": "Home Ownership: OWN",
+    "person_home_ownership_MORTGAGE": "Home Ownership: MORTGAGE",
+    "loan_intent_PERSONAL": "Loan Intent: PERSONAL",
+    "loan_intent_EDUCATION": "Loan Intent: EDUCATION",
+    "loan_intent_VENTURE": "Loan Intent: VENTURE",
+    # Add more mappings if needed
+}
 
-        X_single = preprocess_single_sample()
-        prob_default = model.predict_proba(X_single)[0, 1]
-        progress.empty()
+def rename_features(series):
+    return series.rename(lambda x: FEATURE_LABELS.get(x, x))
 
-    # Risk label
-    if prob_default < 0.15:
-        risk_label = "🟢 Low Risk"
-    elif prob_default < 0.35:
-        risk_label = "🟡 Medium Risk"
-    else:
-        risk_label = "🔴 High Risk"
 
-    st.markdown("<div class='block'>", unsafe_allow_html=True)
-    st.markdown("### 📊 Prediction Result")
+# -----------------------------------------------------------
+# PREPROCESSING FUNCTION
+# -----------------------------------------------------------
+def preprocess(df_raw):
+    df = df_raw.copy()
 
-    col_res, col_gauge = st.columns([1.4, 1])
+    df["cb_person_default_on_file"] = df["cb_person_default_on_file"].map({"Y": 1, "N": 0})
+    grade_map = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
+    df["loan_grade"] = df["loan_grade"].map(grade_map)
 
-    with col_res:
-        st.write(f"**Estimated Default Probability:** `{prob_default*100:.2f}%`")
-        st.write(f"**Risk Level:** {risk_label}")
-        st.write("""
-        **Risk Scale**  
-        • < 15% → Low risk  
-        • 15–35% → Medium risk  
-        • > 35% → High risk  
-        """)
+    df = pd.get_dummies(df)
 
-    with col_gauge:
-        st.plotly_chart(build_gauge(prob_default), use_container_width=True)
+    model_features = model.get_booster().feature_names
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    for col in model_features:
+        if col not in df:
+            df[col] = 0
 
-    # -------------------------------------------------------
-    # SHAP EXPLANATION
-    # -------------------------------------------------------
-    st.markdown("<div class='block'>", unsafe_allow_html=True)
-    st.markdown("### 🔍 Why this prediction? (SHAP explanation)")
+    df = df[model_features]
+    df[SCALER_COLS] = scaler.transform(df[SCALER_COLS])
 
-    shap_values = explainer.shap_values(X_single)
+    return df
 
-    # XGBoost + SHAP returns list for multi-class; we need the "default" class
-    if isinstance(shap_values, list):
-        # class 1 = default
-        shap_row = shap_values[1][0]
-    else:
-        shap_row = shap_values[0]
 
-    contrib = pd.Series(shap_row, index=X_single.columns)
-    contrib = contrib.reindex(contrib.abs().sort_values(ascending=False).index)
+# -----------------------------------------------------------
+# TABS: SINGLE vs BATCH
+# -----------------------------------------------------------
+tab_single, tab_batch = st.tabs(["🔹 Single Prediction", "📂 Batch Prediction (CSV)"])
 
-    top_features = contrib.iloc[:6]
+# ===========================================================
+# 🔹 SINGLE PREDICTION TAB
+# ===========================================================
+with tab_single:
 
-    st.write("Positive SHAP value → pushes **toward default**. Negative → pushes **away from default**.")
+    with st.form("single_form"):
 
-    fig, ax = plt.subplots()
-    top_features[::-1].plot(kind="barh", ax=ax)
-    ax.set_xlabel("SHAP value (impact on default probability)")
-    ax.set_ylabel("Feature")
-    st.pyplot(fig)
+        c1, c2 = st.columns(2)
 
-    st.markdown("</div>", unsafe_allow_html=True)
+        with c1:
+            st.markdown("<div class='block'><h3>👤 Client Information</h3>", unsafe_allow_html=True)
+
+            person_age = st.number_input("Age", 18, 100, 30)
+            person_income = st.number_input("Annual Income ($)", 0, 5_000_000, 50_000)
+            person_emp_length = st.number_input("Employment Length (years)", 0, 50, 5)
+            cred_hist = st.number_input("Credit History Length (years)", 0, 50, 10)
+
+            home = st.selectbox("Home Ownership", ["RENT", "OWN", "MORTGAGE", "OTHER"])
+            prev_default = st.selectbox("Has Defaulted Before?", ["N", "Y"])
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with c2:
+            st.markdown("<div class='block'><h3>💰 Loan Information</h3>", unsafe_allow_html=True)
+
+            intent = st.selectbox("Loan Intent", ["PERSONAL", "EDUCATION", "MEDICAL", "VENTURE", "HOMEIMPROVEMENT", "DEBTCONSOLIDATION"])
+            grade = st.selectbox("Loan Grade", ["A", "B", "C", "D", "E", "F", "G"])
+            amount = st.number_input("Loan Amount ($)", 500, 40_000, 10_000)
+            rate = st.number_input("Interest Rate (%)", 0.0, 40.0, 10.0)
+            pct = st.number_input("Loan Percent Income", 0.0, 1.0, 0.20)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        submitted = st.form_submit_button("🔍 Predict Default Risk")
+
+    if submitted:
+
+        # Small animation
+        with st.spinner("Analyzing the credit risk..."):
+            for i in range(0, 101, 25):
+                time.sleep(0.05)
+                st.progress(i)
+
+        raw = pd.DataFrame([{
+            "person_age": person_age,
+            "person_income": person_income,
+            "person_emp_length": person_emp_length,
+            "cb_person_cred_hist_length": cred_hist,
+            "person_home_ownership": home,
+            "cb_person_default_on_file": prev_default,
+            "loan_intent": intent,
+            "loan_grade": grade,
+            "loan_amnt": amount,
+            "loan_int_rate": rate,
+            "loan_percent_income": pct,
+        }])
+
+        X = preprocess(raw)
+        prob = model.predict_proba(X)[0, 1]
+
+        # Risk level
+        if prob < 0.15:
+            risk = "🟢 Low Risk"
+        elif prob < 0.35:
+            risk = "🟡 Medium Risk"
+        else:
+            risk = "🔴 High Risk"
+
+        st.markdown("<div class='block'>", unsafe_allow_html=True)
+        st.markdown("### 📊 Prediction Result")
+        col_a, col_b = st.columns([1.2, 1])
+
+        with col_a:
+            st.write(f"**Default Probability:** `{prob*100:.2f}%`")
+            st.write(f"**Risk Level:** {risk}")
+
+        with col_b:
+            fig = gauge(prob)
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # ---------------- SHAP ----------------
+        st.markdown("<div class='block'>", unsafe_allow_html=True)
+        st.markdown("### 🔍 SHAP Explanation — Why this prediction?")
+
+        shap_values = explainer.shap_values(X)
+
+        if isinstance(shap_values, list):
+            shap_row = shap_values[1][0]
+        else:
+            shap_row = shap_values[0]
+
+        contrib = pd.Series(shap_row, index=X.columns)
+        contrib = contrib.abs().sort_values(ascending=False).head(6)
+
+        contrib = rename_features(contrib)
+
+        fig, ax = plt.subplots(figsize=(7, 4))
+        contrib.plot(kind="barh", ax=ax, color="#3b82f6")
+        ax.set_title("Top Features Influencing the Prediction", fontsize=12)
+        ax.set_xlabel("SHAP Value")
+        st.pyplot(fig)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ===========================================================
+# 📂 BATCH PREDICTION TAB
+# ===========================================================
+with tab_batch:
+
+    st.markdown("<div class='block'><h3>📂 Batch CSV Prediction</h3>", unsafe_allow_html=True)
+
+    uploaded = st.file_uploader("Upload a CSV file with client data", type=["csv"])
+
+    if uploaded:
+        df_input = pd.read_csv(uploaded)
+        st.write("Preview of uploaded data:", df_input.head())
+
+        try:
+            X_batch = preprocess(df_input)
+            probs = model.predict_proba(X_batch)[:, 1]
+
+            df_input["default_probability"] = probs
+            df_input["risk_category"] = pd.cut(
+                probs,
+                bins=[0, 0.15, 0.35, 1],
+                labels=["Low", "Medium", "High"]
+            )
+
+            st.markdown("### 📊 Batch Prediction Results")
+            st.write(df_input)
+
+            # Download button
+            csv = df_input.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "⬇️ Download Results as CSV",
+                csv,
+                "credit_risk_results.csv",
+                "text/csv",
+            )
+
+        except Exception as e:
+            st.error(f"⚠️ Error processing CSV: {e}")
