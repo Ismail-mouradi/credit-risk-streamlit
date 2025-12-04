@@ -15,18 +15,19 @@ import joblib
 import shap
 import matplotlib.pyplot as plt
 import seaborn as sns
+import streamlit.components.v1 as components
 
 # ----------------------------
-# Load model & preprocessing
+# Load models & preprocessing
 # ----------------------------
 model = joblib.load("xgboost_credit_model.pkl")
 scaler = joblib.load("scaler.pkl")
 
 # ----------------------------
-# Pretty Feature Names for SHAP
+# Feature Name Prettifier
 # ----------------------------
 def prettify_feature_name(name):
-    mapping = {
+    pretty_map = {
         "person_age": "Age",
         "person_income": "Income",
         "person_emp_length": "Employment Length (yrs)",
@@ -38,8 +39,8 @@ def prettify_feature_name(name):
         "cb_person_default_on_file": "Previous Default",
     }
 
-    if name in mapping:
-        return mapping[name]
+    if name in pretty_map:
+        return pretty_map[name]
 
     if name.startswith("person_home_ownership_"):
         return "Home Ownership: " + name.split("_")[-1]
@@ -51,16 +52,15 @@ def prettify_feature_name(name):
 
 
 # ------------------------------------
-# Streamlit Setup
+# Streamlit Page Setup
 # ------------------------------------
 st.set_page_config(page_title="Credit Risk Prediction", layout="wide")
 
 st.title("💳 Credit Risk Prediction App")
-st.write("Enter client and loan details to predict default probability.")
-
+st.write("Fill client and loan details to estimate default probability.")
 
 # ------------------------------------
-# User Input Form
+# User Input Forms
 # ------------------------------------
 col1, col2 = st.columns(2)
 
@@ -71,10 +71,7 @@ with col1:
     income = st.number_input("Annual Income ($)", 1000, 500000, 50000)
     emp_length = st.number_input("Employment Length (years)", 0, 60, 5)
     cred_length = st.number_input("Credit History Length (years)", 0, 40, 10)
-
-    home_ownership = st.selectbox(
-        "Home Ownership", ["RENT", "OWN", "MORTGAGE", "OTHER"]
-    )
+    home_ownership = st.selectbox("Home Ownership", ["RENT", "OWN", "MORTGAGE", "OTHER"])
     default_before = st.selectbox("Has Defaulted Before?", ["Y", "N"])
 
 with col2:
@@ -82,24 +79,17 @@ with col2:
 
     loan_intent = st.selectbox(
         "Loan Intent",
-        [
-            "PERSONAL",
-            "EDUCATION",
-            "MEDICAL",
-            "VENTURE",
-            "HOMEIMPROVEMENT",
-            "DEBTCONSOLIDATION",
-        ],
+        ["PERSONAL", "EDUCATION", "MEDICAL", "VENTURE", "HOMEIMPROVEMENT", "DEBTCONSOLIDATION"],
     )
 
     loan_grade = st.selectbox("Loan Grade", ["A", "B", "C", "D", "E", "F", "G"])
     loan_amnt = st.number_input("Loan Amount ($)", 500, 50000, 10000)
     interest_rate = st.number_input("Interest Rate (%)", 1.0, 40.0, 10.0)
-    dti = st.number_input("Loan % Income (DTI)", 0.01, 1.0, 0.20)
+    dti = st.number_input("Loan Percent Income (DTI)", 0.01, 1.0, 0.20)
 
 
 # ------------------------------------
-# Build Input Row
+# Prepare Input Data
 # ------------------------------------
 input_dict = {
     "person_age": age,
@@ -117,14 +107,14 @@ input_dict = {
 
 df = pd.DataFrame([input_dict])
 
-# One-hot encoding (same as training)
+# One-hot encoding (must match training)
 df = pd.get_dummies(df)
 
-# Align columns with model
+# Ensure missing columns are added
 model_features = model.get_booster().feature_names
 X = df.reindex(columns=model_features, fill_value=0)
 
-# Scale numerical features
+# Scale numeric columns
 num_cols = [
     "person_age",
     "person_income",
@@ -134,66 +124,24 @@ num_cols = [
     "loan_int_rate",
     "loan_percent_income",
 ]
-
 X[num_cols] = scaler.transform(X[num_cols])
 
-
 # ------------------------------------
-# Predict + SHAP
+# Predict
 # ------------------------------------
 if st.button("🚀 Predict Default Risk"):
-
     prob = model.predict_proba(X)[0][1]
-    st.subheader(f"Estimated Probability of Default: **{prob*100:.2f}%**")
+    st.subheader(f"Estimated Default Probability: **{prob*100:.2f}%**")
 
-    # Risk color message
+    # Risk label
     if prob < 0.15:
         st.success("🟢 Low Risk — Client unlikely to default.")
     elif prob < 0.35:
-        st.warning("🟡 Medium Risk — Some risk present.")
+        st.warning("🟡 Medium Risk — Some caution advised.")
     else:
         st.error("🔴 High Risk — High likelihood of default.")
 
-    # ----------------------------------------------------
-    # SHAP Summary — Top Contributing Factors (Bar Plot)
-    # ----------------------------------------------------
-    st.subheader("🔍 SHAP Feature Impact (Top Predictors)")
-
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X)
-
-    if isinstance(shap_values, list):
-        shap_row = shap_values[1][0]
-    else:
-        shap_row = shap_values[0]
-
-    shap_df = pd.DataFrame({
-        "feature": X.columns,
-        "shap": shap_row,
-        "abs_val": np.abs(shap_row)
-    }).sort_values("abs_val", ascending=False)
-
-    shap_df["pretty"] = shap_df["feature"].apply(prettify_feature_name)
-
-    # Take top 10 features
-    top_df = shap_df.head(10)
-
-    # Plot
-    plt.figure(figsize=(8, 6))
-    ax = sns.barplot(
-        data=top_df,
-        x="shap",
-        y="pretty",
-        color="#93c5fd",
-    )
-
-    # Color bars (red = increases risk, blue = decreases risk)
-    for i, val in enumerate(top_df["shap"]):
-        ax.patches[i].set_color("#ef4444" if val > 0 else "#3b82f6")
-
-    plt.axvline(0, color="black", linestyle="--")
-    plt.xlabel("SHAP Impact (positive = higher risk)")
-    plt.ylabel("")
-    plt.title("Top Features Influencing Default Risk")
-
-    st.pyplot(plt)
+    # ------------------------------------
+    # SHAP Explainability
+    # ------------------------------------
+    st.header("🔍 SHAP Explainability —
