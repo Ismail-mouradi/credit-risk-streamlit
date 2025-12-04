@@ -12,7 +12,7 @@ Original file is located at
 # ===========================================================
 
 import shap
-shap.initjs()
+
 
 def prettify_feature_name(name):
     """Turn encoded feature names into human-readable labels."""
@@ -85,19 +85,37 @@ st.pyplot(plt)
 # ===========================================================
 # 2) ⭐ FORCE PLOT (INTERACTIVE)
 # ===========================================================
-with st.expander("📊 SHAP Force Plot (Interactive)"):
-    st.write("Shows how each feature pushes the prediction ↑ or ↓.")
+# ---------- 2) Force plot (interactive) ----------
+with st.expander("📊 SHAP Force Plot"):
 
-    force_html = shap.force_plot(
-        base_value,
-        shap_row,
-        X,
-        matplotlib=False,
-        feature_names=[prettify_feature_name(f) for f in X.columns]
-    )
+    st.write("Shows how each feature pushes the prediction **higher (red)** or **lower (blue)**.")
 
-    shap_html = f"<head>{shap.getjs()}</head><body>{force_html.html()}</body>"
-    st.components.v1.html(shap_html, height=300)
+    try:
+        force_plot = shap.force_plot(
+            base_value,
+            shap_row,
+            X,
+            feature_names=[prettify_feature_name(f) for f in X.columns],
+            matplotlib=False
+        )
+
+        # Works on Streamlit Cloud (no IPython needed)
+        html = f"""
+        <html>
+            <head>
+                {shap.getjs()}
+            </head>
+            <body>
+                {force_plot.html()}
+            </body>
+        </html>
+        """
+
+        components.html(html, height=300)
+
+    except Exception as e:
+        st.info(f"Force plot not available: {e}")
+
 
 
 # ===========================================================
