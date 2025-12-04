@@ -379,21 +379,32 @@ with tab_single:
 
         # ---------- 4) Waterfall plot ----------
         with st.expander("📉 SHAP Waterfall Plot"):
-            st.write("Step-by-step contribution of each feature to the prediction.")
-            try:
-                shap_exp = shap.Explanation(
-                    values=shap_row,
-                    base_values=base_value,
-                    data=X.iloc[0],
-                    feature_names=[prettify_feature_name(f) for f in X.columns],
-                )
-                # Legacy waterfall for better compatibility
-                shap.plots._waterfall.waterfall_legacy(shap_exp, max_display=12, show=False)
-                fig_w = plt.gcf()
-                st.pyplot(fig_w)
-                plt.clf()
-            except Exception as e:
-                st.info(f"Waterfall plot not available: {e}")
+    st.write("Step-by-step contribution of each feature to the prediction.")
+
+    try:
+        # SHAP gives base_value as a scalar for single prediction
+        if isinstance(explainer.expected_value, list):
+            base_val = explainer.expected_value[1]
+        else:
+            base_val = explainer.expected_value
+
+        # Build old-style explanation dictionary
+        shap_exp = {
+            "values": shap_row,
+            "base_values": base_val,
+            "data": X.iloc[0].values,
+            "feature_names": [prettify_feature_name(f) for f in X.columns],
+        }
+
+        # Use legacy waterfall (works on Streamlit Cloud)
+        shap.plots._waterfall.waterfall_legacy(shap_exp, max_display=12, show=False)
+
+        fig = plt.gcf()
+        st.pyplot(fig)
+        plt.clf()
+
+    except Exception as e:
+        st.info(f"Waterfall plot not available: {e}")
 
         # ---------- 5) Natural language summary ----------
         st.subheader("📝 Risk Interpretation Summary")
